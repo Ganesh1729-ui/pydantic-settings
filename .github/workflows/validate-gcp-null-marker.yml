@@ -1,0 +1,78 @@
+name: Validate GCP null marker parsing
+
+on:
+  push:
+    branches: [codex/validate-gcp-null-marker]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    env:
+      BASE_HEAD: 3b405d42a4c55c9e88864bf80cddac44caad7da7
+      SOURCE_HEAD: fd909ff70b48dcd3cec5e661344883dba0888b69
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install frozen dependencies
+        run: uv sync --frozen --all-extras --all-groups
+      - name: Test unchanged upstream baseline
+        run: |
+          git restore --source="$BASE_HEAD" -- pydantic_settings/sources/providers/gcp.py tests/test_source_gcp_secret_manager.py
+          uv run --no-sync coverage run --data-file="$RUNNER_TEMP/baseline.coverage" -m pytest --junitxml="$RUNNER_TEMP/baseline.xml" --durations=8
+      - name: Prove the regression against unchanged source
+        run: |
+          git restore --source="$SOURCE_HEAD" -- tests/test_source_gcp_secret_manager.py
+          set +e
+          uv run --no-sync pytest tests/test_source_gcp_secret_manager.py -k test_env_parse_none_str --junitxml="$RUNNER_TEMP/red.xml" > "$RUNNER_TEMP/red.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/red.log"
+          test "$result" -eq 1
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from xml.etree import ElementTree
+          cases = ElementTree.parse(Path(os.environ['RUNNER_TEMP']) / 'red.xml').findall('.//testcase')
+          failed = [case for case in cases if case.find('failure') is not None]
+          skipped = [case for case in cases if case.find('skipped') is not None]
+          assert len(cases) == 12 and len(failed) == 8 and not skipped
+          print('Confirmed 8 failing regressions and 4 passing controls')
+          PY
+      - name: Test exact fixed source
+        run: |
+          git restore --source="$SOURCE_HEAD" -- pydantic_settings/sources/providers/gcp.py tests/test_source_gcp_secret_manager.py
+          git diff --exit-code "$SOURCE_HEAD" -- pydantic_settings/sources/providers/gcp.py tests/test_source_gcp_secret_manager.py
+          uv run --no-sync coverage run --data-file="$RUNNER_TEMP/fixed.coverage" -m pytest --junitxml="$RUNNER_TEMP/fixed.xml" --durations=8
+          uv run --no-sync coverage report --data-file="$RUNNER_TEMP/fixed.coverage" --include='pydantic_settings/sources/providers/gcp.py' --fail-under=100
+      - name: Check lint, formatting, types and package build
+        run: |
+          uv run --no-sync ruff check pydantic_settings tests
+          uv run --no-sync ruff format --check pydantic_settings tests
+          uv run --no-sync mypy pydantic_settings
+          uv build --out-dir="$RUNNER_TEMP/dist"
+          git diff --exit-code "$SOURCE_HEAD" -- pydantic_settings tests pyproject.toml uv.lock
+      - name: Save before and after evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gcp-null-marker-py${{ matrix.python }}
+          path: |
+            ${{ runner.temp }}/baseline.xml
+            ${{ runner.temp }}/red.xml
+            ${{ runner.temp }}/red.log
+            ${{ runner.temp }}/fixed.xml
+            ${{ runner.temp }}/*.coverage
+          include-hidden-files: true
