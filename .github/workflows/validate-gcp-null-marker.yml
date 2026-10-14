@@ -16,8 +16,8 @@ jobs:
       matrix:
         python: ['3.11', '3.13']
     env:
-      BASE_HEAD: 3b405d42a4c55c9e88864bf80cddac44caad7da7
-      SOURCE_HEAD: fd909ff70b48dcd3cec5e661344883dba0888b69
+      BASE_HEAD: f7534ec8835f6c7ba2fa9167fbca05a19f0a6fc3
+      SOURCE_HEAD: 7f4a5912a73084a69eae3e64eea586066add2927
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
